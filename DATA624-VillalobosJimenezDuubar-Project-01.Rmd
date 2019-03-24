@@ -11,6 +11,15 @@ author: "Duubar Villalobos Jimenez"
 #author: "# CUNY School of Professional Studies  \n **Masters in Data Science**  \n *Duubar Villalobos Jimenez*  \n mydvtech@gmail.com"
 date: "March 17, 2019"
 output:
+  prettydoc::html_pretty:
+    
+    theme: leonids
+    highlight: github
+    toc: yes
+    df_print: paged
+  html_document:
+      df_print: paged
+      code_folding: hide
   pdf_document:
       
       highlight: tango
@@ -28,15 +37,6 @@ output:
       #  after_body: doc-suffix.tex
       #citation_package: natbib
       #keep_tex: true   # To create .tex files
-  html_document:
-      df_print: paged
-      code_folding: hide
-  prettydoc::html_pretty:
-    
-    theme: leonids
-    highlight: github
-    toc: yes
-    df_print: paged
 geometry: margin=1in
 fontfamily: mathpazo
 fontsize: 11pt
@@ -53,6 +53,12 @@ knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h')
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
 # Library definitions
+library(tidyr)       # for data manipulation
+library(dplyr)       # for data manipulation
+library(lubridate)   # for dates
+library(zoo)         # for dates
+library(fpp2)        # for datasets and libraries
+library(naniar)      # For missing data visualiations
 library(kableExtra)  # for table formating
 library(DT)          # to create data table
 ```
@@ -73,16 +79,148 @@ This project consists of 3 parts - two required and one bonus and is worth 15% o
 ```{r, echo=FALSE}
 # Read file
 atm.data <- readxl::read_excel('~/Dropbox/CUNY/Courses/DATA624/Projects/Project01/data/ATM624Data.xlsx')
-data.atm1 <- atm.data[atm.data$ATM == "ATM1", c("DATE", "Cash")]
-
 ```
  
 
+In part A, I want you to forecast how much cash is taken out of 4 different ATM machines for May 2010.  The data is given in a single file.  The variable ‘Cash’ is provided in hundreds of dollars, other than that it is straight forward.   I am being somewhat ambiguous on purpose to make this have a little more business feeling.  Explain and demonstrate your process, techniques used and not used, and your actual forecast.  I am giving you data via an excel file, please provide your written report on your findings, visuals, discussion and your R code via an RPubs link along with the actual.rmd file. Also please submit the forecast which you will put in an Excel readable file.
+
+### Procedure
+
+**First**, let's have a small idea of how the data look like:
+
+```{r, echo=FALSE}
+kable(head(atm.data))  %>%
+  kable_styling("striped", full_width = F)
+```
+
+From above, we notice 3 columns as follows:
+
+**DATE**: Indicate the date for the withdrawals.
+
+**ATM**: Indicate which ATM is the action being referred to.
+
+**Cash**: Indicates the dollar amount of the withdrawals for that specific date.
+
+It is important to note that we need to transform the **Date** from numeric to a more meaningful format. Other than that, seems very straight forward.
 
 
+**Second**, let's have a description of the data:
 
-In part A, I want you to forecast how much cash is taken out of 4 different ATM machines for May 2010.  The data is given in a single file.  The variable ‘Cash’ is provided in hundreds of dollars, other than that it is straight forward.   I am being somewhat ambiguous on purpose to make this have a little more business feeling.  Explain and demonstrate your process, techniques used and not used, and your actual forecast.  I am giving you data via an excel file, please provide your written report on your findings, visuals, discussion and your R code via an RPubs link along with the actual.rmd file  Also please submit the forecast which you will put in an Excel readable file.
+```{r, echo=FALSE}
+summary(atm.data)
+```
 
+It is important to note the presence of missing data as reported in the Cash column under NA's.
+ 
+**Third**, I would like to have a visualization of the missing data since there's an indication of `NA`. For this purpose, I will make use of the function `vis_miss()` from the library `naniar`.
+
+```{r, echo=FALSE, fig.height = 5, fig.width = 9, fig.align = "center"}
+vis_miss(atm.data)
+```
+
+From the above visual, we notice that the missing information seem to be in "blocks".
+
+Let's have a better understanding of the missing data.
+
+```{r, echo=FALSE}
+kable(atm.data[!complete.cases(atm.data),])  %>%
+  kable_styling("striped", full_width = F)
+```
+
+Since there are missing data and the total of missing records is 19, is better just to remove them from the data set. In order to do so, I will make use of the `complete.cases()` function.
+
+```{r, echo=FALSE}
+atm.ts <- atm.data[complete.cases(atm.data),]
+```
+
+**Fourth**, let's transform the numerical dates into more meaningful dates.
+
+It is interesting to note that in this particular case, I will use **1900-01-01** as my origin date.
+
+```{r, echo=FALSE}
+# Origin is the date-time for 1970-01-01 UTC in POSIXct format. This date-time is the origin for the numbering system used by POSIXct, POSIXlt, chron, and Date classes. 
+# It seems that having the standard date is not a good choice, hance, I will use 01/01/1900 as my origin date instead.
+atm.ts$DATE <- as.Date(atm.ts$DATE, origin = "1900-01-01")
+```
+
+Let's visualize some values for the daily entries.
+
+```{r, echo=FALSE}
+kable(head(atm.ts))  %>%
+  kable_styling("striped", full_width = F)
+```
+
+**Fifth**, since we need to forecast monthly withdrawals, I will group the given daily values by month.
+
+```{r, echo=FALSE}
+# Selecting Year and Month only.
+atm.ts$DATE <- format(atm.ts$DATE, "%Y-%m")
+```
+
+Now, let's calculate the monthly values by adding all the withdrawals for each respective month.
+
+```{r, echo=FALSE}
+# Adding each month values in order to have a monthly total.
+atm.ts <- atm.ts %>% 
+              group_by(DATE, ATM) %>% 
+              summarise_all(funs(sum))
+```
+
+```{r, echo=FALSE}
+kable(head(atm.ts))  %>%
+  kable_styling("striped", full_width = F)
+```
+
+
+In order to build a time series, we need to do a series of "data transformations" from the above table. That is, I will transform the long column ATM into multiple columns, each corresponding to the information for each individual ATM in order to provide more meaningful answers.
+
+```{r, echo=FALSE}
+# The arguments to spread():
+# - data: Data object
+# - key: Name of column containing the new column names
+# - value: Name of column containing values
+atm.ts <- spread(data = atm.ts, key = ATM, value = Cash)
+```
+
+
+```{r, echo=FALSE}
+# Create a data frame object
+myts <- data.frame(atm.ts)
+
+# Adding total
+myts$TOTAL <- 0
+myts$TOTAL <- myts$ATM1 + myts$ATM2 + myts$ATM3 + myts$ATM4 
+
+# Create a ts object
+myts <- ts(myts[,-1], frequency = 12, start = c(2009,05))
+```
+
+Let's visualize the final time series table:
+
+```{r, echo=FALSE}
+# Creating data frame for printing purposes
+myts.df <- data.frame(myts)
+
+
+# Need row names from time series
+row.names(myts.df) <-  format(as.yearmon(time(myts)), "%Y-%m")
+
+kable(myts.df) %>%
+  kable_styling("striped", full_width = F)
+```
+
+Now, let's have a better understanding on how this data is behaving over time.
+
+```{r, echo=FALSE, fig.height = 5, fig.width = 9, fig.align = "center"}
+autoplot(myts, facet=TRUE) +
+  xlab("Date") +
+  ylab("Amount in hundreds") +
+  ggtitle("Monthly ATM Withdrawals")
+
+```
+
+From the above graph, it is evident that the data does not change much over time, there seems to be non apparent signs of season currently visible with the exception of a few trends over some periods of time.
+ 
  
 
 ## Part B 
@@ -90,7 +228,7 @@ In part A, I want you to forecast how much cash is taken out of 4 different ATM 
 
  
 
-Part B consists of a simple dataset of residential power usage for January 1998 until December 2013.  Your assignment is to model these data and a monthly forecast for 2014.  The data is given in a single file.  The variable ‘KWH’ is power consumption in Kilowatt hours, the rest is straight forward.    Add this to your existing files above. 
+Part B consists of a simple data set of residential power usage for January 1998 until December 2013.  Your assignment is to model these data and a monthly forecast for 2014.  The data is given in a single file.  The variable ‘KWH’ is power consumption in Kilowatt hours, the rest is straight forward.    Add this to your existing files above. 
 
  
 
